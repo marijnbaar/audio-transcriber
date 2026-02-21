@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 
 interface Segment {
   start: number;
@@ -64,6 +64,21 @@ function saveHistory(items: HistoryItem[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
+function highlightText(text: string, query: string) {
+  if (!query.trim()) return text;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase() ? (
+      <mark key={i} className="bg-yellow-200 text-yellow-900 rounded px-0.5">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
 function WaveformIcon({ className = "" }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
@@ -101,6 +116,10 @@ export default function Home() {
   const [dragOver, setDragOver] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [historyFilter, setHistoryFilter] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -125,6 +144,21 @@ export default function Home() {
   }, []);
 
   const selected = history.find((h) => h.id === selectedId) || null;
+
+  const wordCount = useMemo(() => {
+    if (!selected) return 0;
+    return selected.segments
+      .map((s) => s.text)
+      .join(" ")
+      .split(/\s+/)
+      .filter(Boolean).length;
+  }, [selected]);
+
+  const filteredHistory = useMemo(() => {
+    if (!historyFilter.trim()) return history;
+    const q = historyFilter.toLowerCase();
+    return history.filter((item) => item.fileName.toLowerCase().includes(q));
+  }, [history, historyFilter]);
 
   const handleFile = useCallback((f: File) => {
     setFile(f);
@@ -195,6 +229,14 @@ export default function Home() {
     setHistory(updated);
     saveHistory(updated);
     if (selectedId === id) setSelectedId(null);
+    setConfirmDelete(null);
+  };
+
+  const clearAllHistory = () => {
+    setHistory([]);
+    saveHistory([]);
+    setSelectedId(null);
+    setConfirmClearAll(false);
   };
 
   const copyToClipboard = async (item: HistoryItem) => {
@@ -224,7 +266,7 @@ export default function Home() {
     <div className="min-h-screen">
       {/* Header */}
       <header className="border-b border-gray-200 bg-white">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shrink-0">
             <WaveformIcon className="w-5 h-5 text-white" />
           </div>
@@ -239,7 +281,7 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
         {/* Upload zone */}
         <div
           className={`relative rounded-2xl border-2 border-dashed p-10 text-center cursor-pointer transition-all duration-200 ${
@@ -362,7 +404,7 @@ export default function Home() {
                     <h2 className="font-semibold text-gray-900">
                       {selected.fileName}
                     </h2>
-                    <div className="flex items-center gap-3 mt-1.5">
+                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                       {selected.language && (
                         <span className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -379,6 +421,12 @@ export default function Home() {
                           {formatDuration(selected.duration)}
                         </span>
                       )}
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+                        </svg>
+                        {wordCount.toLocaleString("nl-NL")} woorden
+                      </span>
                     </div>
                   </div>
                   <button
@@ -391,8 +439,8 @@ export default function Home() {
                   </button>
                 </div>
 
-                {/* Action buttons */}
-                <div className="flex gap-2 mt-3">
+                {/* Action buttons + search */}
+                <div className="flex items-center gap-2 mt-3">
                   <button
                     onClick={() => copyToClipboard(selected)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-all duration-200 ${
@@ -421,24 +469,64 @@ export default function Home() {
                     </svg>
                     Download .txt
                   </button>
+                  <div className="ml-auto relative">
+                    <svg className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                    </svg>
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Zoek in transcriptie..."
+                      className="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-300 transition-colors w-52"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
               {/* Segments */}
-              <div className="divide-y divide-gray-100 max-h-[500px] overflow-y-auto">
-                {selected.segments.map((segment, i) => (
-                  <div
-                    key={i}
-                    className="flex gap-4 px-5 py-3 hover:bg-gray-50/50 transition-colors"
-                  >
-                    <span className="text-xs font-mono text-indigo-400 pt-0.5 shrink-0 tabular-nums">
-                      {formatTime(segment.start)}
-                    </span>
-                    <span className="text-gray-700 text-sm leading-relaxed">
-                      {segment.text}
-                    </span>
-                  </div>
-                ))}
+              <div className="max-h-[700px] overflow-y-auto">
+                {selected.segments.map((segment, i) => {
+                  const matchesSearch =
+                    !searchQuery.trim() ||
+                    segment.text.toLowerCase().includes(searchQuery.toLowerCase());
+                  return (
+                    <div
+                      key={i}
+                      className={`flex gap-5 px-6 py-4 border-l-3 transition-colors ${
+                        i % 2 === 0
+                          ? "border-l-indigo-400 bg-white hover:bg-indigo-50/30"
+                          : "border-l-amber-400 bg-gray-50/50 hover:bg-amber-50/30"
+                      } ${!matchesSearch ? "opacity-25" : ""}`}
+                    >
+                      <div className="shrink-0 flex flex-col items-center gap-1.5 pt-0.5">
+                        <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-xs font-bold ${
+                          i % 2 === 0
+                            ? "bg-indigo-100 text-indigo-700"
+                            : "bg-amber-100 text-amber-700"
+                        }`}>
+                          {i + 1}
+                        </span>
+                        <span className="text-xs font-mono text-gray-400 tabular-nums whitespace-nowrap">
+                          {formatTime(segment.start)}
+                        </span>
+                      </div>
+                      <p className="text-gray-800 text-base leading-7 pt-1">
+                        {highlightText(segment.text, searchQuery)}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -454,9 +542,51 @@ export default function Home() {
               <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
                 {history.length}
               </span>
+              <div className="ml-auto flex items-center gap-2">
+                <div className="relative">
+                  <svg className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={historyFilter}
+                    onChange={(e) => setHistoryFilter(e.target.value)}
+                    placeholder="Filter op naam..."
+                    className="pl-8 pr-3 py-1 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:border-indigo-300 focus:outline-none focus:ring-1 focus:ring-indigo-300 transition-colors w-44"
+                  />
+                </div>
+                {confirmClearAll ? (
+                  <div className="flex items-center gap-1.5 animate-fade-in">
+                    <span className="text-xs text-red-600">Weet je het zeker?</span>
+                    <button
+                      onClick={clearAllHistory}
+                      className="px-2 py-1 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                    >
+                      Ja, verwijder alles
+                    </button>
+                    <button
+                      onClick={() => setConfirmClearAll(false)}
+                      className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                    >
+                      Annuleer
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmClearAll(true)}
+                    className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Alles verwijderen"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Alles wissen
+                  </button>
+                )}
+              </div>
             </div>
             <div className="space-y-2">
-              {history.map((item) => (
+              {filteredHistory.map((item) => (
                 <div
                   key={item.id}
                   className={`group flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-all duration-200 ${
@@ -491,20 +621,42 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteItem(item.id);
-                    }}
-                    className="ml-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all shrink-0 p-1 hover:bg-red-50 rounded-lg"
-                    title="Verwijderen"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  {confirmDelete === item.id ? (
+                    <div className="flex items-center gap-1.5 ml-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => deleteItem(item.id)}
+                        className="px-2 py-1 text-xs font-medium text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                      >
+                        Verwijder
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(null)}
+                        className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                      >
+                        Annuleer
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDelete(item.id);
+                      }}
+                      className="ml-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all shrink-0 p-1 hover:bg-red-50 rounded-lg"
+                      title="Verwijderen"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               ))}
+              {historyFilter && filteredHistory.length === 0 && (
+                <p className="text-sm text-gray-400 text-center py-6">
+                  Geen resultaten voor &ldquo;{historyFilter}&rdquo;
+                </p>
+              )}
             </div>
           </div>
         )}
